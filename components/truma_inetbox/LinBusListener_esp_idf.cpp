@@ -1,4 +1,4 @@
-#ifdef USE_ESP32_FRAMEWORK_ESP_IDF
+#ifdef USE_ESP_IDF
 
 #include "LinBusListener.h"
 #include "esphome/core/log.h"
@@ -34,7 +34,40 @@ void LinBusListener::setup_framework() {
     ESP_LOGW(TAG, "uart_set_rx_timeout failed: %s", esp_err_to_name(err));
   }
 
-  ESP_LOGCONFIG(TAG, "UART configured for loop-driven RX processing");
+  // Dedizierter RX-Task: Core 1 (WiFi/BT/Hauptloop laufen auf Core 0),
+  // Prioritaet 24 wie der uartEventTask_ vor dem 2026.3-Redesign.
+  // Stellt sicher, dass LIN-Frames byte-nah gelesen und Antwort-Slots
+  // eingehalten werden, unabhaengig von der Last des Hauptloops.
+  xTaskCreatePinnedToCore(LinBusListener::rx_task_trampoline,
+                          "truma_lin_rx",          // name
+                          4096,                    // stack (bytes)
+                          this,                    // param
+                          24,                      // priority
+                          &this->rx_task_handle_,  // handle
+                          1                        // core
+  );
+  if (this->rx_task_handle_ == nullptr) {
+    ESP_LOGE(TAG, "Failed to create LIN RX task, falling back to loop-driven RX");
+    ESP_LOGCONFIG(TAG, "UART configured for loop-driven RX processing");
+  } else {
+    ESP_LOGCONFIG(TAG, "UART configured for task-driven RX processing (core 1, prio 24)");
+  }
+}
+
+void LinBusListener::rx_task_trampoline(void *param) {
+  static_cast<LinBusListener *>(param)->rx_task_loop_();
+}
+
+void LinBusListener::rx_task_loop_() {
+  while (true) {
+    if (!this->check_for_lin_fault_() && this->available() > 0) {
+      this->on_receive_();
+    } else {
+      // 1 Tick = 1 ms (CONFIG_FREERTOS_HZ=1000). Haelt Lese-Gaps unter der
+      // 1,49-ms-Break-Schwelle und laesst IDLE1 den Watchdog fuettern.
+      vTaskDelay(1);
+    }
+  }
 }
 
 }  // namespace truma_inetbox
@@ -42,4 +75,4 @@ void LinBusListener::setup_framework() {
 
 #undef ESPHOME_UART
 
-#endif  // USE_ESP32_FRAMEWORK_ESP_IDF
+#endif  // USE_ESP_IDF

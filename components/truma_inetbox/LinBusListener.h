@@ -8,6 +8,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
+#include <freertos/task.h>
 #endif  // USE_ESP32
 
 #ifndef TRUMA_MSG_QUEUE_LENGTH
@@ -107,6 +108,14 @@ class LinBusListener : public PollingComponent, public uart::UARTDevice {
   void read_lin_frame_();
   void clear_uart_buffer_();
   void setup_framework();
+
+#ifdef USE_ESP_IDF
+  // Dedizierter RX-Task (Core 1, hohe Prioritaet) -- stellt das
+  // Vor-2026.3-Timing wieder her. loop() dient nur noch als Fallback.
+  TaskHandle_t rx_task_handle_{nullptr};
+  static void rx_task_trampoline(void *param);
+  void rx_task_loop_();
+#endif  // USE_ESP_IDF
 
   uint8_t lin_msg_static_queue_storage[TRUMA_MSG_QUEUE_LENGTH * sizeof(QUEUE_LIN_MSG)];
   StaticQueue_t lin_msg_static_queue_;
